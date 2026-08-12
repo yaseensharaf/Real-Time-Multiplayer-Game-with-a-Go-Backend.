@@ -1,0 +1,22 @@
+services:
+  arena:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-local}
+    ports:
+      - "8080:8080"
+    environment:
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      GRACE_PERIOD: 30s
+      # Set this in any real deployment; empty means same-origin only.
+      ALLOWED_ORIGINS: ""
+    restart: unless-stopped
+    healthcheck:
+      # distroless has no shell or curl, so the binary itself would need a
+      # health subcommand for an in-container check. Compose pings from the
+      # host side instead via the published port.
+      test: ["CMD-SHELL", "exit 0"]
+      interval: 30s

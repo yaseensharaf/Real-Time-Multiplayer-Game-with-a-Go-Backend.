@@ -1,0 +1,20 @@
+# Binaries
+bin/
+server
+*.exe
+
+# Test and coverage output
+coverage.out
+*.test
+
+# Environment and secrets — never commit these
+.env
+.env.*
+*.pem
+*.key
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store

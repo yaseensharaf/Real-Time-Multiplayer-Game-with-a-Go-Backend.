@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>game-arena — live match</title>
+<style>
+  :root {
+    --bg: #06090a;
+    --panel: #0c1210;
+    --line: #1c2b24;
+    --text: #a9c2b4;
+    --dim: #4d6459;
+    --p1: #5eff9f;
+    --p2: #ffb454;
+    --warn: #ff6b6b;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  }
+
+  body { display: flex; align-items: center; justify-content: center; padding: 20px; }
+
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+    background: repeating-linear-gradient(
+      to bottom, rgba(255,255,255,0.02) 0 1px, transparent 1px 3px);
+    mix-blend-mode: overlay;
+  }
+
+  .frame {
+    width: min(420px, 100%);
+    border: 1px solid var(--line); background: var(--panel);
+    box-shadow: 0 0 0 1px #000, 0 20px 60px -20px rgba(0,0,0,0.8);
+  }
+
+  .titlebar {
+    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border-bottom: 1px solid var(--line); font-size: 11px;
+    letter-spacing: 0.06em; color: var(--dim); text-transform: uppercase;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
+  .dot.live { background: var(--p1); box-shadow: 0 0 8px var(--p1); animation: pulse 1.6s ease-in-out infinite; }
+  .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+
+  .titlebar .room { color: var(--text); }
+  .spacer { flex: 1 }
+
+  .content { padding: 20px }
+
+  .youare {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin-bottom: 14px; font-size: 12px; color: var(--dim);
+  }
+  .youare strong { font-size: 20px; letter-spacing: .04em }
+  .youare strong.x { color: var(--p1) }
+  .youare strong.o { color: var(--p2) }
+
+  #board {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+    background: var(--line); border: 1px solid var(--line);
+  }
+  .cell {
+    aspect-ratio: 1; background: var(--bg); border: 0; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    font: inherit; font-size: clamp(2rem, 8vw, 2.6rem); font-weight: 800;
+    cursor: pointer; color: transparent; transition: background .12s, opacity .12s;
+  }
+  .cell:hover:not(:disabled) { background: #0e1613 }
+  .cell:disabled { cursor: default }
+  .cell:focus-visible { outline: 2px solid var(--p1); outline-offset: -2px }
+  .cell.x { color: var(--p1); text-shadow: 0 0 12px rgba(94,255,159,.35) }
+  .cell.o { color: var(--p2); text-shadow: 0 0 12px rgba(255,180,84,.35) }
+  .cell.win { background: #101b16 }
+
+  .log {
+    margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line);
+    font-size: 12px; line-height: 1.7; min-height: 44px;
+  }
+  .log .row { display: flex; gap: 8px }
+  .log .tag { color: var(--dim); flex-shrink: 0 }
+  .msg.x { color: var(--p1) }
+  .msg.o { color: var(--p2) }
+  .msg.warn { color: var(--warn) }
+  .msg.dim { color: var(--dim) }
+
+  .cursor {
+    display: inline-block; width: 7px; height: 12px; background: currentColor;
+    vertical-align: middle; margin-left: 4px; animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0 } }
+
+  button.action {
+    margin-top: 12px; width: 100%; padding: 10px; font: inherit; font-size: 12px;
+    letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+    background: transparent; color: var(--p1); border: 1px solid var(--p1);
+    transition: background .15s;
+  }
+  button.action:hover { background: rgba(94,255,159,.08) }
+  button.action:disabled { color: var(--dim); border-color: var(--line); cursor: default; background: none }
+  button.action[hidden] { display: none }
+
+  @media (prefers-reduced-motion: reduce) {
+    body::before { display: none }
+    .dot.live, .cursor { animation: none }
+  }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="titlebar">
+      <span class="dot" id="dot"></span>
+      <span class="room" id="room">ws://game-arena</span>
+      <span class="spacer"></span>
+      <span id="conn">connecting</span>
+    </div>
+
+    <div class="content">
+      <div class="youare">
+        <span>you are</span>
+        <strong id="mark">—</strong>
+      </div>
+
+      <div id="board" role="grid" aria-label="game board"></div>
+
+      <div class="log">
+        <div class="row">
+          <span class="tag">&gt;</span>
+          <span class="msg dim" id="status" aria-live="polite">connecting<span class="cursor"></span></span>
+        </div>
+      </div>
+
+      <button class="action" id="rematch" hidden>play again</button>
+    </div>
+  </div>
+
+<script>
+"use strict";
+
+// Wire protocol constants, mirrored from internal/hub/protocol.go.
+const MSG = {
+  ASSIGNED: "assigned", STATE: "state", WAITING: "waiting", ERROR: "error",
+  OPP_DISCONNECTED: "opponent_disconnected", OPP_RECONNECTED: "opponent_reconnected",
+  OPP_LEFT: "opponent_left", REMATCH_OFFERED: "rematch_offered",
+  SERVER_SHUTDOWN: "server_shutdown",
+};
+
+const MARK = { EMPTY: 0, X: 1, O: 2 };
+const OUTCOME = { IN_PROGRESS: 0, WIN_X: 1, WIN_O: 2, DRAW: 3 };
+
+const el = {
+  board: document.getElementById("board"),
+  status: document.getElementById("status"),
+  conn: document.getElementById("conn"),
+  dot: document.getElementById("dot"),
+  room: document.getElementById("room"),
+  mark: document.getElementById("mark"),
+  rematch: document.getElementById("rematch"),
+};
+
+// The session is kept so a dropped socket can resume the same match rather
+// than starting a new one. sessionStorage, not localStorage: two tabs are two
+// players, and sharing a session between them would make them fight over one
+// seat.
+const store = {
+  get: () => { try { return sessionStorage.getItem("arena_session"); } catch { return null; } },
+  set: (v) => { try { sessionStorage.setItem("arena_session", v); } catch {} },
+  clear: () => { try { sessionStorage.removeItem("arena_session"); } catch {} },
+};
+
+let ws = null;
+let myMark = MARK.EMPTY;
+let state = null;
+let matchOver = false;
+let reconnectAttempts = 0;
+let deliberateClose = false;
+
+const cells = [];
+for (let i = 0; i < 9; i++) {
+  const b = document.createElement("button");
+  b.className = "cell";
+  b.type = "button";
+  b.setAttribute("role", "gridcell");
+  b.setAttribute("aria-label", `cell ${i + 1}`);
+  b.addEventListener("click", () => send({ type: "move", index: i }));
+  el.board.appendChild(b);
+  cells.push(b);
+}
+
+el.rematch.addEventListener("click", () => {
+  send({ type: "rematch" });
+  el.rematch.disabled = true;
+  el.rematch.textContent = "waiting for opponent…";
+});
+
+function send(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+function setStatus(text, cls = "dim", cursor = true) {
+  el.status.className = "msg " + cls;
+  el.status.textContent = text;
+  if (cursor) el.status.appendChild(document.createElement("span")).className = "cursor";
+}
+
+function markName(m) { return m === MARK.X ? "X" : m === MARK.O ? "O" : "—"; }
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const session = store.get();
+  const qs = session ? `?session=${encodeURIComponent(session)}` : "";
+  ws = new WebSocket(`${proto}://${location.host}/ws${qs}`);
+
+  ws.onopen = () => {
+    reconnectAttempts = 0;
+    el.conn.textContent = "connected";
+    el.dot.className = "dot live";
+  };
+
+  ws.onmessage = (evt) => {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    handle(msg);
+  };
+
+  ws.onclose = () => {
+    el.dot.className = "dot";
+    if (deliberateClose) { el.conn.textContent = "closed"; return; }
+    scheduleReconnect();
+  };
+
+  ws.onerror = () => { el.dot.className = "dot warn"; };
+}
+
+// Exponential backoff with a cap, so a server restart doesn't get hammered by
+// every open tab reconnecting in lockstep.
+function scheduleReconnect() {
+  reconnectAttempts++;
+  const delay = Math.min(1000 * 2 ** (reconnectAttempts - 1), 15000);
+  el.conn.textContent = "reconnecting";
+  setStatus(`connection lost — retrying in ${Math.round(delay / 1000)}s`, "warn");
+  setTimeout(connect, delay);
+}
+
+function handle(msg) {
+  switch (msg.type) {
+    case MSG.ASSIGNED: {
+      const d = msg.data || {};
+      store.set(d.session);
+      myMark = d.mark === "X" ? MARK.X : MARK.O;
+      el.mark.textContent = d.mark;
+      el.mark.className = d.mark === "X" ? "x" : "o";
+      el.room.textContent = `room/${(d.room || "").slice(0, 8)}`;
+      matchOver = false;
+      el.rematch.hidden = true;
+      el.rematch.disabled = false;
+      el.rematch.textContent = "play again";
+      break;
+    }
+
+    case MSG.WAITING:
+      setStatus("waiting for an opponent", "dim");
+      break;
+
+    case MSG.STATE:
+      state = msg.data;
+      render();
+      break;
+
+    case MSG.ERROR:
+      // The server explains why a move was refused, so the UI can say it
+      // rather than leaving the player wondering why nothing happened.
+      setStatus(msg.data?.reason || "move rejected", "warn");
+      break;
+
+    case MSG.OPP_DISCONNECTED:
+      setStatus(`opponent dropped — seat held ${msg.data?.graceSeconds ?? 30}s`, "warn");
+      break;
+
+    case MSG.OPP_RECONNECTED:
+      setStatus("opponent reconnected", "dim");
+      render();
+      break;
+
+    case MSG.OPP_LEFT:
+      store.clear();
+      setStatus(msg.data?.reason || "opponent left", "warn");
+      lockBoard();
+      break;
+
+    case MSG.REMATCH_OFFERED:
+      if (!el.rematch.disabled) setStatus("opponent wants a rematch", "dim");
+      break;
+
+    case MSG.SERVER_SHUTDOWN:
+      deliberateClose = true;
+      store.clear();
+      setStatus("server shutting down", "warn");
+      lockBoard();
+      break;
+  }
+}
+
+function lockBoard() { cells.forEach((c) => (c.disabled = true)); }
+
+function render() {
+  if (!state) return;
+
+  const glyph = ["", "X", "O"];
+  const win = new Set(state.winLine || []);
+
+  state.board.forEach((v, i) => {
+    const c = cells[i];
+    c.textContent = glyph[v] || "";
+    c.className = "cell"
+      + (v === MARK.X ? " x" : v === MARK.O ? " o" : "")
+      + (win.has(i) ? " win" : "");
+    c.disabled = v !== MARK.EMPTY
+      || state.outcome !== OUTCOME.IN_PROGRESS
+      || state.turn !== myMark;
+  });
+
+  if (state.outcome === OUTCOME.IN_PROGRESS) {
+    const yours = state.turn === myMark;
+    setStatus(yours ? "your move" : `waiting on ${markName(state.turn)}`,
+      state.turn === MARK.X ? "x" : "o");
+    return;
+  }
+
+  matchOver = true;
+  el.rematch.hidden = false;
+
+  if (state.outcome === OUTCOME.DRAW) {
+    setStatus("draw — no winner", "dim", false);
+  } else {
+    const winner = state.outcome === OUTCOME.WIN_X ? MARK.X : MARK.O;
+    const label = winner === myMark ? "you win" : "you lose";
+    setStatus(`${markName(winner)} wins — ${label}`, winner === MARK.X ? "x" : "o", false);
+  }
+}
+
+window.addEventListener("beforeunload", () => { deliberateClose = true; });
+
+connect();
+</script>
+</body>
+</html>

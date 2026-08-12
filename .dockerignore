@@ -1,0 +1,7 @@
+.git
+.github
+bin
+coverage.out
+*.md
+Makefile
+docker-compose.yml
