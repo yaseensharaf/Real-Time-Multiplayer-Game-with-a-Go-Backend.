@@ -3,348 +3,693 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>game-arena — live match</title>
+<title>game-arena — real-time match engine</title>
+<meta name="description" content="Server-authoritative real-time multiplayer, built in Go.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #06090a;
-    --panel: #0c1210;
-    --line: #1c2b24;
-    --text: #a9c2b4;
-    --dim: #4d6459;
-    --p1: #5eff9f;
-    --p2: #ffb454;
-    --warn: #ff6b6b;
+    /* Blueprint ground: navy rather than black, so the two signal colours
+       read as instruments on a panel instead of neon on a void. */
+    --ground:   #0B1A2E;
+    --panel:    #10243C;
+    --panel-hi: #16304E;
+    --rule:     #1E3A5C;
+    --ink:      #D6E4F0;
+    --muted:    #6E8BA8;
+    --x:        #45D9F5;
+    --o:        #FFB347;
+    --alert:    #FF7A85;
+
+    --mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --disp: 'IBM Plex Sans Condensed', 'IBM Plex Sans', system-ui, sans-serif;
   }
 
   * { box-sizing: border-box; }
 
-  html, body {
-    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
-    font-family: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    padding: clamp(12px, 3vw, 32px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 14px;
+    /* Drafting grid: 24px minor rule, barely visible, establishes the
+       blueprint register before a single word is read. */
+    background-image:
+      linear-gradient(rgba(69,217,245,.045) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(69,217,245,.045) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
 
-  body { display: flex; align-items: center; justify-content: center; padding: 20px; }
+  /* ---------- shell ---------- */
 
-  body::before {
-    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
-    background: repeating-linear-gradient(
-      to bottom, rgba(255,255,255,0.02) 0 1px, transparent 1px 3px);
-    mix-blend-mode: overlay;
+  .console {
+    width: min(940px, 100%);
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    box-shadow: 0 24px 70px -24px rgba(0,0,0,.75);
   }
 
-  .frame {
-    width: min(420px, 100%);
-    border: 1px solid var(--line); background: var(--panel);
-    box-shadow: 0 0 0 1px #000, 0 20px 60px -20px rgba(0,0,0,0.8);
+  .masthead {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--rule);
   }
 
-  .titlebar {
-    display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-    border-bottom: 1px solid var(--line); font-size: 11px;
-    letter-spacing: 0.06em; color: var(--dim); text-transform: uppercase;
+  .wordmark {
+    font-family: var(--disp);
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: .01em;
+    text-transform: uppercase;
+    margin-right: auto;
   }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); flex-shrink: 0; }
-  .dot.live { background: var(--p1); box-shadow: 0 0 8px var(--p1); animation: pulse 1.6s ease-in-out infinite; }
-  .dot.warn { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
-  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  .wordmark span { color: var(--muted); font-weight: 600; }
 
-  .titlebar .room { color: var(--text); }
-  .spacer { flex: 1 }
-
-  .content { padding: 20px }
-
-  .youare {
-    display: flex; align-items: baseline; justify-content: space-between;
-    margin-bottom: 14px; font-size: 12px; color: var(--dim);
+  .readout {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
   }
-  .youare strong { font-size: 20px; letter-spacing: .04em }
-  .youare strong.x { color: var(--p1) }
-  .youare strong.o { color: var(--p2) }
-
-  #board {
-    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
-    background: var(--line); border: 1px solid var(--line);
+  .readout b {
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
   }
+
+  .beacon {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--rule);
+    flex: none;
+  }
+  .beacon[data-state="live"] { background: #4ADE80; box-shadow: 0 0 9px #4ADE80; animation: throb 2s ease-in-out infinite; }
+  .beacon[data-state="lost"] { background: var(--alert); box-shadow: 0 0 9px var(--alert); }
+  @keyframes throb { 50% { opacity: .3; } }
+
+  /* ---------- two-column body ---------- */
+
+  .bay {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 300px);
+  }
+  .stage  { padding: clamp(18px, 3vw, 28px); min-width: 0; }
+  .column { width: 100%; max-width: 400px; margin: 0 auto; }
+  .scope  { border-left: 1px solid var(--rule); min-width: 0; display: flex; flex-direction: column; }
+
+  /* ---------- identity strip ---------- */
+
+  .whoami {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 1px dashed var(--rule);
+  }
+  .whoami .caption {
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--muted); line-height: 1.5;
+  }
+  .sigil {
+    width: 46px; height: 46px; flex: none;
+    display: grid; place-items: center;
+    font-family: var(--disp); font-weight: 700; font-size: 26px;
+    border: 1px solid var(--rule);
+    color: var(--muted);
+    transition: color .2s, border-color .2s, box-shadow .2s;
+  }
+  .sigil[data-mark="X"] { color: var(--x); border-color: var(--x); box-shadow: inset 0 0 22px rgba(69,217,245,.14); }
+  .sigil[data-mark="O"] { color: var(--o); border-color: var(--o); box-shadow: inset 0 0 22px rgba(255,179,71,.14); }
+
+  .turnbar {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+  }
+  .turnbar i {
+    display: block; width: 34px; height: 3px; background: var(--rule);
+    transition: background .25s;
+  }
+  .turnbar i[data-turn="X"] { background: var(--x); }
+  .turnbar i[data-turn="O"] { background: var(--o); }
+
+  /* ---------- board ---------- */
+
+  /* Capped and centred: an uncapped board pushed the status line and the
+     primary action below the fold on a laptop viewport. */
+  .grid-wrap { position: relative; }
+
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
   .cell {
-    aspect-ratio: 1; background: var(--bg); border: 0; padding: 0;
-    display: flex; align-items: center; justify-content: center;
-    font: inherit; font-size: clamp(2rem, 8vw, 2.6rem); font-weight: 800;
-    cursor: pointer; color: transparent; transition: background .12s, opacity .12s;
-  }
-  .cell:hover:not(:disabled) { background: #0e1613 }
-  .cell:disabled { cursor: default }
-  .cell:focus-visible { outline: 2px solid var(--p1); outline-offset: -2px }
-  .cell.x { color: var(--p1); text-shadow: 0 0 12px rgba(94,255,159,.35) }
-  .cell.o { color: var(--p2); text-shadow: 0 0 12px rgba(255,180,84,.35) }
-  .cell.win { background: #101b16 }
-
-  .log {
-    margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line);
-    font-size: 12px; line-height: 1.7; min-height: 44px;
-  }
-  .log .row { display: flex; gap: 8px }
-  .log .tag { color: var(--dim); flex-shrink: 0 }
-  .msg.x { color: var(--p1) }
-  .msg.o { color: var(--p2) }
-  .msg.warn { color: var(--warn) }
-  .msg.dim { color: var(--dim) }
-
-  .cursor {
-    display: inline-block; width: 7px; height: 12px; background: currentColor;
-    vertical-align: middle; margin-left: 4px; animation: blink 1s step-end infinite;
-  }
-  @keyframes blink { 50% { opacity: 0 } }
-
-  button.action {
-    margin-top: 12px; width: 100%; padding: 10px; font: inherit; font-size: 12px;
-    letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
-    background: transparent; color: var(--p1); border: 1px solid var(--p1);
+    position: relative;
+    aspect-ratio: 1;
+    display: grid; place-items: center;
+    background: var(--ground);
+    border: 0; margin: 0; padding: 0;
+    font-family: var(--disp);
+    font-weight: 700;
+    font-size: clamp(2.2rem, 9vw, 3.4rem);
+    line-height: 1;
+    color: transparent;
+    cursor: pointer;
     transition: background .15s;
   }
-  button.action:hover { background: rgba(94,255,159,.08) }
-  button.action:disabled { color: var(--dim); border-color: var(--line); cursor: default; background: none }
-  button.action[hidden] { display: none }
+  .cell:hover:not(:disabled) { background: var(--panel-hi); }
+  .cell:disabled { cursor: default; }
+  .cell:focus-visible { outline: 2px solid var(--ink); outline-offset: -3px; }
+
+  /* Coordinate label, drafting-style: makes the board legible as a
+     addressable grid, which is exactly what the protocol treats it as. */
+  .cell::after {
+    content: attr(data-idx);
+    position: absolute; top: 5px; left: 7px;
+    font-family: var(--mono); font-size: 9px; font-weight: 400;
+    color: var(--muted); opacity: .38;
+  }
+
+  .cell[data-mark="X"] { color: var(--x); }
+  .cell[data-mark="O"] { color: var(--o); }
+  .cell[data-fresh="1"] { animation: land .32s cubic-bezier(.2,.9,.3,1.4); }
+  @keyframes land { from { transform: scale(.55); opacity: 0; } }
+
+  /* Winning stroke drawn from the server's winLine — the client never
+     works out who won, it just renders what it was told. */
+  .strike {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    width: 100%; height: 100%;
+  }
+  /* The board is square, so the viewBox scales uniformly and stroke width can
+     be expressed in user units. Using non-scaling-stroke here would make the
+     dash array resolve in screen pixels instead — which drew the line only
+     partway across, with a stray cap floating at the far end. */
+  .strike line {
+    stroke-width: 1;
+    stroke-linecap: round;
+    filter: drop-shadow(0 0 5px currentColor);
+    opacity: .95;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    animation: draw .55s .12s ease-out forwards;
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  /* ---------- status + action ---------- */
+
+  .status {
+    margin-top: 16px;
+    display: flex; align-items: baseline; gap: 9px;
+    font-size: 13px; min-height: 22px;
+  }
+  .status .chev { color: var(--muted); }
+  .status .text { color: var(--ink); }
+  .status .text[data-tone="x"]     { color: var(--x); }
+  .status .text[data-tone="o"]     { color: var(--o); }
+  .status .text[data-tone="muted"] { color: var(--muted); }
+  .status .text[data-tone="alert"] { color: var(--alert); }
+
+  .caret {
+    display: inline-block; width: 6px; height: 13px;
+    background: currentColor; vertical-align: -2px; margin-left: 5px;
+    animation: wink 1.05s step-end infinite;
+  }
+  @keyframes wink { 50% { opacity: 0; } }
+
+  .again {
+    margin-top: 16px; width: 100%; padding: 11px;
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: .16em; text-transform: uppercase;
+    color: var(--ground); background: var(--ink);
+    border: 1px solid var(--ink); cursor: pointer;
+    transition: opacity .15s;
+  }
+  .again:hover { opacity: .86; }
+  .again:disabled { background: transparent; color: var(--muted); border-color: var(--rule); cursor: default; }
+  .again[hidden] { display: none; }
+
+  /* ---------- signature: protocol inspector ---------- */
+
+  .scope-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 13px 16px; border-bottom: 1px solid var(--rule);
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted);
+  }
+  .scope-head .count { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--ink); }
+
+  #frames {
+    flex: 1;
+    margin: 0; padding: 10px 0;
+    list-style: none;
+    overflow-y: auto;
+    max-height: 380px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--rule) transparent;
+  }
+  #frames::-webkit-scrollbar { width: 6px; }
+  #frames::-webkit-scrollbar-thumb { background: var(--rule); }
+
+  .frame {
+    display: grid;
+    grid-template-columns: 14px minmax(0,1fr) auto;
+    gap: 8px; align-items: baseline;
+    padding: 4px 16px;
+    font-size: 11px; line-height: 1.45;
+    animation: slip .22s ease-out;
+  }
+  @keyframes slip { from { opacity: 0; transform: translateX(6px); } }
+
+  .frame .dir  { font-weight: 600; }
+  .frame .name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .frame .meta { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+  .frame[data-dir="in"]  .dir { color: var(--x); }
+  .frame[data-dir="out"] .dir { color: var(--o); }
+  .frame[data-kind="err"] .name { color: var(--alert); }
+
+  .scope-foot {
+    border-top: 1px solid var(--rule);
+    padding: 11px 16px 13px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+  }
+  .stat .k { font-size: 9px; letter-spacing: .13em; text-transform: uppercase; color: var(--muted); }
+  .stat .v { font-size: 15px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+  .legend {
+    padding: 10px 16px 14px;
+    font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--muted); border-top: 1px solid var(--rule); line-height: 1.7;
+  }
+
+  /* ---------- responsive ---------- */
+
+  @media (max-width: 720px) {
+    .bay { grid-template-columns: 1fr; }
+    .scope { border-left: 0; border-top: 1px solid var(--rule); }
+    #frames { max-height: 168px; }
+    .masthead { gap: 10px; }
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    body::before { display: none }
-    .dot.live, .cursor { animation: none }
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .strike line { stroke-dashoffset: 0; }
   }
 </style>
 </head>
 <body>
-  <div class="frame">
-    <div class="titlebar">
-      <span class="dot" id="dot"></span>
-      <span class="room" id="room">ws://game-arena</span>
-      <span class="spacer"></span>
-      <span id="conn">connecting</span>
-    </div>
 
-    <div class="content">
-      <div class="youare">
-        <span>you are</span>
-        <strong id="mark">—</strong>
-      </div>
+<main class="console">
+  <header class="masthead">
+    <div class="wordmark">game<span>-</span>arena</div>
 
-      <div id="board" role="grid" aria-label="game board"></div>
+    <div class="readout"><span class="beacon" id="beacon"></span><b id="link">offline</b></div>
+    <div class="readout">rtt <b id="rtt">—</b></div>
+    <div class="readout">room <b id="room">—</b></div>
+  </header>
 
-      <div class="log">
-        <div class="row">
-          <span class="tag">&gt;</span>
-          <span class="msg dim" id="status" aria-live="polite">connecting<span class="cursor"></span></span>
+  <div class="bay">
+    <section class="stage">
+     <div class="column">
+      <div class="whoami">
+        <div class="sigil" id="sigil" aria-hidden="true">?</div>
+        <div>
+          <div class="caption">you are playing as</div>
+          <div class="caption" id="seat" style="color:var(--ink);letter-spacing:.06em">unassigned</div>
         </div>
+        <div class="turnbar"><span id="turn-label">idle</span><i id="turn-bar"></i></div>
       </div>
 
-      <button class="action" id="rematch" hidden>play again</button>
-    </div>
+      <div class="grid-wrap">
+        <div id="grid" role="grid" aria-label="Game board"></div>
+        <svg class="strike" id="strike" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+      </div>
+
+      <p class="status">
+        <span class="chev">&gt;</span>
+        <span class="text" id="status" data-tone="muted" aria-live="polite">connecting</span>
+      </p>
+
+      <button class="again" id="again" hidden>play again</button>
+     </div>
+    </section>
+
+    <!-- Signature element: the wire protocol, on show rather than hidden. -->
+    <aside class="scope" aria-label="Protocol inspector">
+      <div class="scope-head">
+        <span>wire protocol</span>
+        <span class="count" id="fcount">0</span>
+      </div>
+
+      <ul id="frames"></ul>
+
+      <div class="scope-foot">
+        <div class="stat"><div class="k">frames</div><div class="v" id="s-frames">0</div></div>
+        <div class="stat"><div class="k">moves</div><div class="v" id="s-moves">0</div></div>
+        <div class="stat"><div class="k">rejects</div><div class="v" id="s-rejects">0</div></div>
+      </div>
+
+      <div class="legend">
+        ↓ server → client &nbsp;·&nbsp; ↑ client → server<br>
+        state is authoritative; client sends intent only
+      </div>
+    </aside>
   </div>
+</main>
 
 <script>
 "use strict";
 
-// Wire protocol constants, mirrored from internal/hub/protocol.go.
+/* Wire protocol, mirrored from internal/hub/protocol.go */
 const MSG = {
   ASSIGNED: "assigned", STATE: "state", WAITING: "waiting", ERROR: "error",
   OPP_DISCONNECTED: "opponent_disconnected", OPP_RECONNECTED: "opponent_reconnected",
   OPP_LEFT: "opponent_left", REMATCH_OFFERED: "rematch_offered",
   SERVER_SHUTDOWN: "server_shutdown",
 };
+const MARK    = { EMPTY: 0, X: 1, O: 2 };
+const OUTCOME = { LIVE: 0, WIN_X: 1, WIN_O: 2, DRAW: 3 };
 
-const MARK = { EMPTY: 0, X: 1, O: 2 };
-const OUTCOME = { IN_PROGRESS: 0, WIN_X: 1, WIN_O: 2, DRAW: 3 };
-
-const el = {
-  board: document.getElementById("board"),
-  status: document.getElementById("status"),
-  conn: document.getElementById("conn"),
-  dot: document.getElementById("dot"),
-  room: document.getElementById("room"),
-  mark: document.getElementById("mark"),
-  rematch: document.getElementById("rematch"),
+const $ = (id) => document.getElementById(id);
+const ui = {
+  grid: $("grid"), strike: $("strike"), status: $("status"), again: $("again"),
+  beacon: $("beacon"), link: $("link"), rtt: $("rtt"), room: $("room"),
+  sigil: $("sigil"), seat: $("seat"), turnLabel: $("turn-label"), turnBar: $("turn-bar"),
+  frames: $("frames"), fcount: $("fcount"),
+  sFrames: $("s-frames"), sMoves: $("s-moves"), sRejects: $("s-rejects"),
 };
 
-// The session is kept so a dropped socket can resume the same match rather
-// than starting a new one. sessionStorage, not localStorage: two tabs are two
-// players, and sharing a session between them would make them fight over one
-// seat.
+/* sessionStorage, not localStorage: two tabs are two players, and a shared
+   session would make them fight over one seat. */
 const store = {
-  get: () => { try { return sessionStorage.getItem("arena_session"); } catch { return null; } },
-  set: (v) => { try { sessionStorage.setItem("arena_session", v); } catch {} },
-  clear: () => { try { sessionStorage.removeItem("arena_session"); } catch {} },
+  get() { try { return sessionStorage.getItem("arena_session"); } catch { return null; } },
+  set(v) { try { sessionStorage.setItem("arena_session", v); } catch {} },
+  clear() { try { sessionStorage.removeItem("arena_session"); } catch {} },
 };
 
 let ws = null;
 let myMark = MARK.EMPTY;
-let state = null;
-let matchOver = false;
-let reconnectAttempts = 0;
-let deliberateClose = false;
+let board = null;
+let prevBoard = new Array(9).fill(0);
+let attempts = 0;
+let leaving = false;
+let sentAt = 0;                       // for measuring move round-trip
+const tally = { frames: 0, moves: 0, rejects: 0 };
+
+/* ---------- board construction ---------- */
 
 const cells = [];
 for (let i = 0; i < 9; i++) {
   const b = document.createElement("button");
-  b.className = "cell";
   b.type = "button";
+  b.className = "cell";
+  b.dataset.idx = String(i);
   b.setAttribute("role", "gridcell");
-  b.setAttribute("aria-label", `cell ${i + 1}`);
-  b.addEventListener("click", () => send({ type: "move", index: i }));
-  el.board.appendChild(b);
+  b.setAttribute("aria-label", "cell " + (i + 1));
+  b.disabled = true;
+  b.addEventListener("click", () => play(i));
+  ui.grid.appendChild(b);
   cells.push(b);
 }
 
-el.rematch.addEventListener("click", () => {
+ui.again.addEventListener("click", () => {
   send({ type: "rematch" });
-  el.rematch.disabled = true;
-  el.rematch.textContent = "waiting for opponent…";
+  ui.again.disabled = true;
+  ui.again.textContent = "waiting for opponent";
 });
 
+/* ---------- transport ---------- */
+
 function send(msg) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify(msg));
+  logFrame("out", msg.type, msg.type === "move" ? "index " + msg.index : "");
 }
 
-function setStatus(text, cls = "dim", cursor = true) {
-  el.status.className = "msg " + cls;
-  el.status.textContent = text;
-  if (cursor) el.status.appendChild(document.createElement("span")).className = "cursor";
+function play(i) {
+  sentAt = performance.now();
+  tally.moves++;
+  ui.sMoves.textContent = tally.moves;
+  send({ type: "move", index: i });
 }
-
-function markName(m) { return m === MARK.X ? "X" : m === MARK.O ? "O" : "—"; }
 
 function connect() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  const session = store.get();
-  const qs = session ? `?session=${encodeURIComponent(session)}` : "";
-  ws = new WebSocket(`${proto}://${location.host}/ws${qs}`);
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const s = store.get();
+  ws = new WebSocket(`${scheme}://${location.host}/ws${s ? "?session=" + encodeURIComponent(s) : ""}`);
 
   ws.onopen = () => {
-    reconnectAttempts = 0;
-    el.conn.textContent = "connected";
-    el.dot.className = "dot live";
+    attempts = 0;
+    ui.link.textContent = "live";
+    ui.beacon.dataset.state = "live";
   };
 
-  ws.onmessage = (evt) => {
-    let msg;
-    try { msg = JSON.parse(evt.data); } catch { return; }
-    handle(msg);
+  ws.onmessage = (e) => {
+    let msg; try { msg = JSON.parse(e.data); } catch { return; }
+    receive(msg);
   };
 
   ws.onclose = () => {
-    el.dot.className = "dot";
-    if (deliberateClose) { el.conn.textContent = "closed"; return; }
-    scheduleReconnect();
+    ui.beacon.dataset.state = leaving ? "" : "lost";
+    if (leaving) { ui.link.textContent = "closed"; return; }
+    retry();
   };
 
-  ws.onerror = () => { el.dot.className = "dot warn"; };
+  ws.onerror = () => { ui.beacon.dataset.state = "lost"; };
 }
 
-// Exponential backoff with a cap, so a server restart doesn't get hammered by
-// every open tab reconnecting in lockstep.
-function scheduleReconnect() {
-  reconnectAttempts++;
-  const delay = Math.min(1000 * 2 ** (reconnectAttempts - 1), 15000);
-  el.conn.textContent = "reconnecting";
-  setStatus(`connection lost — retrying in ${Math.round(delay / 1000)}s`, "warn");
-  setTimeout(connect, delay);
+/* Exponential backoff so a server restart isn't hammered by every open tab. */
+function retry() {
+  attempts++;
+  const wait = Math.min(1000 * 2 ** (attempts - 1), 15000);
+  ui.link.textContent = "retrying";
+  setStatus(`connection lost — retrying in ${Math.round(wait / 1000)}s`, "alert");
+  setTimeout(connect, wait);
 }
 
-function handle(msg) {
+/* ---------- message handling ---------- */
+
+function receive(msg) {
+  const d = msg.data || {};
+
   switch (msg.type) {
-    case MSG.ASSIGNED: {
-      const d = msg.data || {};
+    case MSG.ASSIGNED:
       store.set(d.session);
       myMark = d.mark === "X" ? MARK.X : MARK.O;
-      el.mark.textContent = d.mark;
-      el.mark.className = d.mark === "X" ? "x" : "o";
-      el.room.textContent = `room/${(d.room || "").slice(0, 8)}`;
-      matchOver = false;
-      el.rematch.hidden = true;
-      el.rematch.disabled = false;
-      el.rematch.textContent = "play again";
-      break;
-    }
-
-    case MSG.WAITING:
-      setStatus("waiting for an opponent", "dim");
-      break;
+      ui.sigil.textContent = d.mark;
+      ui.sigil.dataset.mark = d.mark;
+      ui.seat.textContent = d.mark === "X" ? "player one · moves first" : "player two";
+      ui.room.textContent = (d.room || "").slice(0, 8) || "—";
+      ui.again.hidden = true;
+      ui.again.disabled = false;
+      ui.again.textContent = "play again";
+      clearStrike();
+      prevBoard = new Array(9).fill(0);
+      logFrame("in", msg.type, "mark " + d.mark);
+      return;
 
     case MSG.STATE:
-      state = msg.data;
+      board = d;
+      if (sentAt) {
+        ui.rtt.textContent = Math.round(performance.now() - sentAt) + "ms";
+        sentAt = 0;
+      }
+      logFrame("in", msg.type, describe(d));
       render();
+      return;
+
+    case MSG.WAITING:
+      setStatus("waiting for an opponent", "muted");
       break;
 
     case MSG.ERROR:
-      // The server explains why a move was refused, so the UI can say it
-      // rather than leaving the player wondering why nothing happened.
-      setStatus(msg.data?.reason || "move rejected", "warn");
-      break;
+      tally.rejects++;
+      ui.sRejects.textContent = tally.rejects;
+      setStatus(d.reason || "move rejected", "alert");
+      logFrame("in", msg.type, d.reason || "", "err");
+      return;
 
     case MSG.OPP_DISCONNECTED:
-      setStatus(`opponent dropped — seat held ${msg.data?.graceSeconds ?? 30}s`, "warn");
+      setStatus(`opponent dropped · seat held ${d.graceSeconds ?? 30}s`, "alert");
       break;
 
     case MSG.OPP_RECONNECTED:
-      setStatus("opponent reconnected", "dim");
+      setStatus("opponent reconnected", "muted");
       render();
       break;
 
     case MSG.OPP_LEFT:
       store.clear();
-      setStatus(msg.data?.reason || "opponent left", "warn");
-      lockBoard();
+      setStatus(d.reason || "opponent left", "alert");
+      lock();
       break;
 
     case MSG.REMATCH_OFFERED:
-      if (!el.rematch.disabled) setStatus("opponent wants a rematch", "dim");
+      if (!ui.again.disabled) setStatus("opponent wants a rematch", "muted");
       break;
 
     case MSG.SERVER_SHUTDOWN:
-      deliberateClose = true;
+      leaving = true;
       store.clear();
-      setStatus("server shutting down", "warn");
-      lockBoard();
+      setStatus("server shutting down", "alert");
+      lock();
       break;
   }
+
+  logFrame("in", msg.type, "");
 }
 
-function lockBoard() { cells.forEach((c) => (c.disabled = true)); }
+/* ---------- rendering ---------- */
+
+const GLYPH = ["", "X", "O"];
+const name  = (m) => GLYPH[m] || "—";
 
 function render() {
-  if (!state) return;
+  if (!board) return;
+  const winning = new Set(board.winLine || []);
+  const live = board.outcome === OUTCOME.LIVE;
+  const yours = live && board.turn === myMark;
 
-  const glyph = ["", "X", "O"];
-  const win = new Set(state.winLine || []);
-
-  state.board.forEach((v, i) => {
+  board.board.forEach((v, i) => {
     const c = cells[i];
-    c.textContent = glyph[v] || "";
-    c.className = "cell"
-      + (v === MARK.X ? " x" : v === MARK.O ? " o" : "")
-      + (win.has(i) ? " win" : "");
-    c.disabled = v !== MARK.EMPTY
-      || state.outcome !== OUTCOME.IN_PROGRESS
-      || state.turn !== myMark;
-  });
+    c.textContent = GLYPH[v] || "";
+    if (v) c.dataset.mark = GLYPH[v]; else delete c.dataset.mark;
 
-  if (state.outcome === OUTCOME.IN_PROGRESS) {
-    const yours = state.turn === myMark;
-    setStatus(yours ? "your move" : `waiting on ${markName(state.turn)}`,
-      state.turn === MARK.X ? "x" : "o");
+    /* Animate only the cell that changed, so a reconnect that replays the
+       whole board doesn't burst every square at once. */
+    if (v && !prevBoard[i]) {
+      c.dataset.fresh = "1";
+      setTimeout(() => delete c.dataset.fresh, 340);
+    }
+    c.disabled = !!v || !yours;
+  });
+  prevBoard = board.board.slice();
+
+  ui.turnBar.dataset.turn = live ? name(board.turn) : "";
+  ui.turnLabel.textContent = live ? name(board.turn) + " to move" : "final";
+
+  if (live) {
+    setStatus(yours ? "your move" : `waiting on ${name(board.turn)}`,
+              board.turn === MARK.X ? "x" : "o");
     return;
   }
 
-  matchOver = true;
-  el.rematch.hidden = false;
+  lock();
+  ui.again.hidden = false;
+  drawStrike(board.winLine, board.outcome);
 
-  if (state.outcome === OUTCOME.DRAW) {
-    setStatus("draw — no winner", "dim", false);
+  if (board.outcome === OUTCOME.DRAW) {
+    setStatus("draw — board full, no line", "muted", false);
   } else {
-    const winner = state.outcome === OUTCOME.WIN_X ? MARK.X : MARK.O;
-    const label = winner === myMark ? "you win" : "you lose";
-    setStatus(`${markName(winner)} wins — ${label}`, winner === MARK.X ? "x" : "o", false);
+    const w = board.outcome === OUTCOME.WIN_X ? MARK.X : MARK.O;
+    setStatus(`${name(w)} takes it — ${w === myMark ? "you win" : "you lose"}`,
+              w === MARK.X ? "x" : "o", false);
   }
 }
 
-window.addEventListener("beforeunload", () => { deliberateClose = true; });
+function drawStrike(line, outcome) {
+  clearStrike();
+  if (!line || line.length !== 3) return;
+  const at = (i) => ({ x: ((i % 3) + 0.5) * (100 / 3), y: (Math.floor(i / 3) + 0.5) * (100 / 3) });
+  let a = at(line[0]), b = at(line[2]);
+  // Extend past both ends by a third of a cell.
+  const ext = (100 / 3) * 0.34;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  a = { x: a.x - (dx / len) * ext, y: a.y - (dy / len) * ext };
+  b = { x: b.x + (dx / len) * ext, y: b.y + (dy / len) * ext };
+  const el = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  el.setAttribute("x1", a.x); el.setAttribute("y1", a.y);
+  el.setAttribute("x2", b.x); el.setAttribute("y2", b.y);
+  const stroke = getComputedStyle(document.documentElement)
+    .getPropertyValue(outcome === OUTCOME.WIN_X ? "--x" : "--o").trim();
+  el.setAttribute("stroke", stroke);
+  el.setAttribute("pathLength", "100");
+  // currentColor drives the glow filter, so the halo matches the stroke.
+  el.style.color = stroke;
+  ui.strike.appendChild(el);
+}
+
+function clearStrike() { ui.strike.replaceChildren(); }
+
+function lock() { cells.forEach((c) => (c.disabled = true)); }
+
+function setStatus(text, tone = "muted", caret = true) {
+  ui.status.dataset.tone = tone;
+  ui.status.textContent = text;
+  if (caret) {
+    const c = document.createElement("span");
+    c.className = "caret";
+    ui.status.appendChild(c);
+  }
+}
+
+/* Compact one-line summary of a state frame, in the inspector's voice. */
+function describe(s) {
+  const filled = s.board.filter(Boolean).length;
+  if (s.outcome === OUTCOME.LIVE) return `turn ${name(s.turn)} · ${filled}/9`;
+  if (s.outcome === OUTCOME.DRAW) return "draw";
+  return `win ${s.outcome === OUTCOME.WIN_X ? "X" : "O"} · line ${(s.winLine || []).join(",")}`;
+}
+
+/* ---------- the inspector ---------- */
+
+let lastAt = 0;
+function logFrame(dir, type, detail, kind) {
+  const now = performance.now();
+  const delta = lastAt ? `+${Math.round(now - lastAt)}ms` : "—";
+  lastAt = now;
+
+  tally.frames++;
+  ui.sFrames.textContent = tally.frames;
+  ui.fcount.textContent = tally.frames;
+
+  const li = document.createElement("li");
+  li.className = "frame";
+  li.dataset.dir = dir;
+  if (kind) li.dataset.kind = kind;
+
+  const arrow = document.createElement("span");
+  arrow.className = "dir";
+  arrow.textContent = dir === "in" ? "↓" : "↑";
+
+  const label = document.createElement("span");
+  label.className = "name";
+  label.textContent = detail ? `${type} · ${detail}` : type;
+
+  const meta = document.createElement("span");
+  meta.className = "meta";
+  meta.textContent = delta;
+
+  li.append(arrow, label, meta);
+  ui.frames.appendChild(li);
+
+  /* Bound the log so a long session can't grow the DOM without limit. */
+  while (ui.frames.children.length > 60) ui.frames.removeChild(ui.frames.firstChild);
+  ui.frames.scrollTop = ui.frames.scrollHeight;
+}
+
+window.addEventListener("beforeunload", () => { leaving = true; });
 
 connect();
 </script>
